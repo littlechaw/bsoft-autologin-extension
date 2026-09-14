@@ -137,8 +137,9 @@ const startLogin = async () => {
 };
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (!changeInfo.url || !changeInfo.url.startsWith("chrome-error://")) return;
-  getState().then(async (state) => {
+  if (!changeInfo.url && changeInfo.status !== "complete") return;
+  Promise.all([getState(), chrome.tabs.get(tabId).catch(() => null)]).then(async ([state, tab]) => {
+    if (!tab?.url?.startsWith("chrome-error://")) return;
     if (!state.busy || state.tabId !== tabId || state.privacyWarningHandled) return;
     await setState({ ...state, privacyWarningHandled: true });
     try {
