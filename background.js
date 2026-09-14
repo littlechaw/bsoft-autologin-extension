@@ -36,6 +36,36 @@ const detachDebugger = async (tabId) => {
   }
 };
 
+const clickPrivacyWarning = async (tabId) => {
+  // chrome-error:// 页面不允许内容脚本注入，只能通过调试协议模拟用户点击。
+  // 使用视口比例定位，兼容不同窗口尺寸和缩放比例。
+  let width = 1920;
+  let height = 1080;
+  try {
+    const metrics = await chrome.debugger.sendCommand({ tabId }, "Page.getLayoutMetrics");
+    width = metrics?.cssVisualViewport?.clientWidth || width;
+    height = metrics?.cssVisualViewport?.clientHeight || height;
+  } catch {
+    // 使用默认尺寸继续尝试点击。
+  }
+
+  const click = async (xRatio, yRatio) => {
+    const x = Math.round(width * xRatio);
+    const y = Math.round(height * yRatio);
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x, y, button: "left", clickCount: 1
+    });
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x, y, button: "left", clickCount: 1
+    });
+  };
+
+  // Chrome 中文隐私页中“高级”位于左侧，“继续前往”展开后位于右侧。
+  await click(0.2, 0.765);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  await click(0.735, 0.765);
+};
+
 const closeTab = async (tabId) => {
   if (!tabId) return;
   try {
@@ -80,13 +110,9 @@ const startLogin = async () => {
 
   let tab;
   try {
-    // 隐私错误页（chrome-error://）不允许注入内容脚本。先在空白临时页上
-    // 建立调试会话并忽略该页的证书错误，等效于手动点击“高级/继续前往”。
-    tab = await chrome.tabs.create({ active: false, url: "about:blank" });
+    // 先建立调试会话，等检测到 chrome-error:// 隐私页后模拟两次鼠标点击。
+    tab = await chrome.tabs.create({ active: true, url: "about:blank" });
     await chrome.debugger.attach({ tabId: tab.id }, "1.3");
-    await chrome.debugger.sendCommand({ tabId: tab.id }, "Security.setIgnoreCertificateErrors", {
-      ignore: true
-    });
 
     const current = await getState();
     if (!current.busy || current.jobId !== jobId) {
@@ -109,6 +135,19 @@ const startLogin = async () => {
 
   return getState();
 };
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url || !changeInfo.url.startsWith("chrome-error://")) return;
+  getState().then(async (state) => {
+    if (!state.busy || state.tabId !== tabId || state.privacyWarningHandled) return;
+    await setState({ ...state, privacyWarningHandled: true });
+    try {
+      await clickPrivacyWarning(tabId);
+    } catch {
+      await finish({ tabId });
+    }
+  });
+});
 
 chrome.runtime.onInstalled.addListener(() => {
   resetState();
