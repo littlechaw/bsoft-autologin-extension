@@ -39,6 +39,23 @@ const detachDebugger = async (tabId) => {
 const clickPrivacyWarning = async (tabId) => {
   // chrome-error:// 页面不允许内容脚本注入，只能通过调试协议模拟用户点击。
   // 使用视口比例定位，兼容不同窗口尺寸和缩放比例。
+  const clickElement = async (selector) => {
+    try {
+      const result = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+        expression: `(() => { const element = document.querySelector(${JSON.stringify(selector)}); if (!element) return false; element.click(); return true; })()`,
+        returnByValue: true
+      });
+      return result?.result?.value === true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (await clickElement("#details-button")) {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    if (await clickElement("#proceed-link")) return;
+  }
+
   let width = 1920;
   let height = 1080;
   try {
