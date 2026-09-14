@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "description": "为 BSOFT Wi-Fi 网关登录页自动填充本机凭据。",
   "permissions": ["tabs", "storage", "alarms", "debugger"],
-  "host_permissions": ["https://portal.bsoft.com.cn:19008/*"],
+  "host_permissions": [
+    "https://portal.bsoft.com.cn:19008/*",
+    "http://portal.bsoft.com.cn:19008/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -16,7 +19,9 @@
     {
       "matches": [
         "https://portal.bsoft.com.cn:19008/portalpage/*/pc/auth.html*",
-        "https://portal.bsoft.com.cn:19008/portalpage/*/pc/authSuccess.html*"
+        "https://portal.bsoft.com.cn:19008/portalpage/*/pc/authSuccess.html*",
+        "http://portal.bsoft.com.cn:19008/portalpage/*/pc/auth.html*",
+        "http://portal.bsoft.com.cn:19008/portalpage/*/pc/authSuccess.html*"
       ],
       "js": ["config.js", "content.js"],
       "run_at": "document_idle"

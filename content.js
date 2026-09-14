@@ -28,16 +28,30 @@
     if (agreeCheck.src.endsWith("/uncheck.png")) agreeCheck.click();
   };
 
-  const login = async () => {
-    const username = document.querySelector("#username");
-    const password = document.querySelector("#password");
-    const loginButton = document.querySelector("#loginBtn");
+  const waitForLoginControls = async (timeoutMs = 30_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const username = document.querySelector("#username");
+      const password = document.querySelector("#password");
+      const loginButton = document.querySelector("#loginBtn");
+      if (username instanceof HTMLInputElement &&
+          password instanceof HTMLInputElement &&
+          loginButton instanceof HTMLElement) {
+        return { username, password, loginButton };
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    }
+    return null;
+  };
 
-    if (!(username instanceof HTMLInputElement) ||
-        !(password instanceof HTMLInputElement) ||
-        !(loginButton instanceof HTMLElement)) {
+  const login = async () => {
+    const controls = await waitForLoginControls();
+
+    if (!controls) {
       return { ok: false, message: "未识别到网关登录控件" };
     }
+
+    const { username, password, loginButton } = controls;
 
     const credentials = await getCredentials();
     if (!credentials) return { ok: false, message: "请先在扩展弹窗输入工号和密码" };

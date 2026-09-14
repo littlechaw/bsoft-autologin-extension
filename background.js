@@ -1,6 +1,6 @@
 importScripts("config.js");
 
-const LOGIN_TIMEOUT_MS = 25_000;
+const LOGIN_TIMEOUT_MS = 60_000;
 const STATE_KEY = "bsoftLoginState";
 const TIMEOUT_ALARM = "bsoft-login-timeout";
 
@@ -51,14 +51,28 @@ const finish = async ({ tabId }) => {
 
   await chrome.alarms.clear(TIMEOUT_ALARM);
   const loginTabId = tabId || state.tabId;
+  // 先清空状态，避免 detach/close 触发 onDetach/onRemoved 时重复进入 finish。
+  await setState(emptyState());
   if (state.debuggerAttached) await detachDebugger(loginTabId);
   await closeTab(loginTabId);
-  await setState(emptyState());
 };
 
 const startLogin = async () => {
   const previous = await getState();
-  if (previous.busy) return previous;
+  if (previous.busy) {
+    // Service worker 重启后 session 状态可能残留；标签页不存在时解除锁定，
+    // 否则后续点击会一直被误判为“已有登录任务”。
+    if (!previous.tabId) {
+      await resetState();
+    } else {
+      try {
+        await chrome.tabs.get(previous.tabId);
+        return previous;
+      } catch {
+        await resetState();
+      }
+    }
+  }
 
   const jobId = crypto.randomUUID();
   await setState({ busy: true, jobId });
@@ -110,6 +124,19 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       finish({ tabId: state.tabId });
     });
   }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  getState().then((state) => {
+    if (state.busy && state.tabId === tabId) finish({ tabId });
+  });
+});
+
+chrome.debugger.onDetach.addListener((source) => {
+  const tabId = source?.tabId;
+  getState().then((state) => {
+    if (state.busy && state.tabId === tabId) finish({ tabId });
+  });
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
