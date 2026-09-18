@@ -28,14 +28,33 @@ const detachDebugger = async (tabId) => {
 };
 
 const clickPrivacyWarning = async (tabId) => {
-  // chrome-error:// 页面不允许内容脚本注入，只能通过调试协议访问页面元素。
+  // chrome-error:// 页面不允许内容脚本注入。通过 CDP 读取元素实际边界后点击，
+  // 不依赖窗口尺寸、缩放比例或页面布局。
   const clickElement = async (selector) => {
     try {
-      const result = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
-        expression: `(() => { const element = document.querySelector(${JSON.stringify(selector)}); if (!element) return false; element.click(); return true; })()`,
-        returnByValue: true
+      const { root } = await chrome.debugger.sendCommand({ tabId }, "DOM.getDocument", {
+        depth: 1,
+        pierce: true
       });
-      return result?.result?.value === true;
+      const { nodeId } = await chrome.debugger.sendCommand({ tabId }, "DOM.querySelector", {
+        nodeId: root.nodeId,
+        selector
+      });
+      if (!nodeId) return false;
+
+      const { model } = await chrome.debugger.sendCommand({ tabId }, "DOM.getBoxModel", {
+        nodeId
+      });
+      const quad = model.border;
+      const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+      const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+      await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+        type: "mousePressed", x, y, button: "left", clickCount: 1
+      });
+      await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+        type: "mouseReleased", x, y, button: "left", clickCount: 1
+      });
+      return true;
     } catch {
       return false;
     }
@@ -101,6 +120,7 @@ const startLogin = async () => {
     tab = await chrome.tabs.create({ active: true, url: "about:blank" });
     await chrome.debugger.attach({ tabId: tab.id }, "1.3");
     await chrome.debugger.sendCommand({ tabId: tab.id }, "Page.enable");
+    await chrome.debugger.sendCommand({ tabId: tab.id }, "DOM.enable");
 
     const current = await getState();
     if (!current.busy || current.jobId !== jobId) {
