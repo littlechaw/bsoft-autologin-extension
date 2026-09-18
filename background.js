@@ -27,49 +27,59 @@ const detachDebugger = async (tabId) => {
   }
 };
 
-const clickPrivacyWarning = async (tabId) => {
+const clickElement = async (tabId, selector) => {
   // chrome-error:// 页面不允许内容脚本注入。通过 CDP 读取元素实际边界后点击，
   // 不依赖窗口尺寸、缩放比例或页面布局。
-  const clickElement = async (selector) => {
-    try {
-      const { root } = await chrome.debugger.sendCommand({ tabId }, "DOM.getDocument", {
-        depth: 1,
-        pierce: true
-      });
-      const { nodeId } = await chrome.debugger.sendCommand({ tabId }, "DOM.querySelector", {
-        nodeId: root.nodeId,
-        selector
-      });
-      if (!nodeId) return false;
+  try {
+    const { root } = await chrome.debugger.sendCommand({ tabId }, "DOM.getDocument", {
+      depth: 1,
+      pierce: true
+    });
+    const { nodeId } = await chrome.debugger.sendCommand({ tabId }, "DOM.querySelector", {
+      nodeId: root.nodeId,
+      selector
+    });
+    if (!nodeId) return false;
 
-      const { model } = await chrome.debugger.sendCommand({ tabId }, "DOM.getBoxModel", {
-        nodeId
-      });
-      const quad = model.border;
-      const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-      const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
-      await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-        type: "mousePressed", x, y, button: "left", clickCount: 1
-      });
-      await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-        type: "mouseReleased", x, y, button: "left", clickCount: 1
-      });
-      return true;
-    } catch {
-      return false;
+    const { model } = await chrome.debugger.sendCommand({ tabId }, "DOM.getBoxModel", {
+      nodeId
+    });
+    const quad = model.border;
+    const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+    const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x, y, button: "left", clickCount: 1
+    });
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x, y, button: "left", clickCount: 1
+    });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const startPrivacyWarningPolling = (tabId) => {
+  const deadline = Date.now() + 15_000;
+
+  const poll = async () => {
+    const state = await getState();
+    if (!state.busy || state.tabId !== tabId || state.privacyWarningHandled ||
+        Date.now() >= deadline) return;
+
+    if (!state.privacyWarningOpened) {
+      if (await clickElement(tabId, "#details-button")) {
+        await setState({ ...state, privacyWarningOpened: true });
+      }
+    } else if (await clickElement(tabId, "#proceed-link")) {
+      await setState({ ...state, privacyWarningHandled: true });
+      return;
     }
+
+    setTimeout(poll, 150);
   };
 
-  if (!await clickElement("#details-button")) return false;
-
-  // 展开高级信息后，“继续前往”链接会异步插入。绝不回退到坐标点击，
-  // 以免误点同一行右侧的“返回安全连接”。
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    if (await clickElement("#proceed-link")) return true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return false;
+  poll();
 };
 
 const closeTab = async (tabId) => {
@@ -116,7 +126,7 @@ const startLogin = async () => {
 
   let tab;
   try {
-    // 先建立调试会话，等检测到 chrome-error:// 隐私页后模拟两次鼠标点击。
+    // 先建立调试会话，导航后主动轮询隐私页中的两个按钮。
     tab = await chrome.tabs.create({ active: true, url: "about:blank" });
     await chrome.debugger.attach({ tabId: tab.id }, "1.3");
     await chrome.debugger.sendCommand({ tabId: tab.id }, "Page.enable");
@@ -132,6 +142,7 @@ const startLogin = async () => {
     await setState({ ...current, tabId: tab.id, debuggerAttached: true });
     const authUrl = `${BSOFT_LOGIN.authUrl}#bsoft-autologin=${encodeURIComponent(jobId)}`;
     await chrome.tabs.update(tab.id, { url: authUrl });
+    startPrivacyWarningPolling(tab.id);
   } catch {
     if (tab?.id) {
       await detachDebugger(tab.id);
@@ -143,21 +154,6 @@ const startLogin = async () => {
 
   return getState();
 };
-
-chrome.debugger.onEvent.addListener((source, method) => {
-  if (method !== "Page.loadEventFired" || !source.tabId) return;
-  getState().then(async (state) => {
-    const tabId = source.tabId;
-    if (!state.busy || state.tabId !== tabId || state.privacyWarningHandled) return;
-    try {
-      if (await clickPrivacyWarning(tabId)) {
-        await setState({ ...state, privacyWarningHandled: true });
-      }
-    } catch {
-      // 不是隐私页或调试上下文已切换时不终止正常登录流程。
-    }
-  });
-});
 
 chrome.runtime.onInstalled.addListener(() => {
   resetState();
