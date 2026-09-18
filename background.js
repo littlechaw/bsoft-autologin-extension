@@ -21,15 +21,6 @@ const resetState = async () => {
 const detachDebugger = async (tabId) => {
   if (!tabId) return;
   try {
-    // 证书错误忽略设置由调试会话控制，关闭前先恢复默认校验。
-    await chrome.debugger.sendCommand({ tabId }, "Security.setIgnoreCertificateErrors", {
-      ignore: false
-    });
-  } catch {
-    // 目标页可能已经关闭，或调试会话已经断开。
-  }
-
-  try {
     await chrome.debugger.detach({ tabId });
   } catch {
     // 无活动调试会话时无需处理。
@@ -37,8 +28,7 @@ const detachDebugger = async (tabId) => {
 };
 
 const clickPrivacyWarning = async (tabId) => {
-  // chrome-error:// 页面不允许内容脚本注入，只能通过调试协议模拟用户点击。
-  // 使用视口比例定位，兼容不同窗口尺寸和缩放比例。
+  // chrome-error:// 页面不允许内容脚本注入，只能通过调试协议访问页面元素。
   const clickElement = async (selector) => {
     try {
       const result = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
@@ -51,36 +41,16 @@ const clickPrivacyWarning = async (tabId) => {
     }
   };
 
-  if (await clickElement("#details-button")) {
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    if (await clickElement("#proceed-link")) return;
+  if (!await clickElement("#details-button")) return false;
+
+  // 展开高级信息后，“继续前往”链接会异步插入。绝不回退到坐标点击，
+  // 以免误点同一行右侧的“返回安全连接”。
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (await clickElement("#proceed-link")) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-
-  let width = 1920;
-  let height = 1080;
-  try {
-    const metrics = await chrome.debugger.sendCommand({ tabId }, "Page.getLayoutMetrics");
-    width = metrics?.cssVisualViewport?.clientWidth || width;
-    height = metrics?.cssVisualViewport?.clientHeight || height;
-  } catch {
-    // 使用默认尺寸继续尝试点击。
-  }
-
-  const click = async (xRatio, yRatio) => {
-    const x = Math.round(width * xRatio);
-    const y = Math.round(height * yRatio);
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-      type: "mousePressed", x, y, button: "left", clickCount: 1
-    });
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-      type: "mouseReleased", x, y, button: "left", clickCount: 1
-    });
-  };
-
-  // Chrome 中文隐私页中“高级”位于左侧，“继续前往”展开后位于右侧。
-  await click(0.2, 0.765);
-  await new Promise((resolve) => setTimeout(resolve, 350));
-  await click(0.735, 0.765);
+  return false;
 };
 
 const closeTab = async (tabId) => {
@@ -130,6 +100,7 @@ const startLogin = async () => {
     // 先建立调试会话，等检测到 chrome-error:// 隐私页后模拟两次鼠标点击。
     tab = await chrome.tabs.create({ active: true, url: "about:blank" });
     await chrome.debugger.attach({ tabId: tab.id }, "1.3");
+    await chrome.debugger.sendCommand({ tabId: tab.id }, "Page.enable");
 
     const current = await getState();
     if (!current.busy || current.jobId !== jobId) {
@@ -153,16 +124,17 @@ const startLogin = async () => {
   return getState();
 };
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (!changeInfo.url && changeInfo.status !== "complete") return;
-  Promise.all([getState(), chrome.tabs.get(tabId).catch(() => null)]).then(async ([state, tab]) => {
-    if (!tab?.url?.startsWith("chrome-error://")) return;
+chrome.debugger.onEvent.addListener((source, method) => {
+  if (method !== "Page.loadEventFired" || !source.tabId) return;
+  getState().then(async (state) => {
+    const tabId = source.tabId;
     if (!state.busy || state.tabId !== tabId || state.privacyWarningHandled) return;
-    await setState({ ...state, privacyWarningHandled: true });
     try {
-      await clickPrivacyWarning(tabId);
+      if (await clickPrivacyWarning(tabId)) {
+        await setState({ ...state, privacyWarningHandled: true });
+      }
     } catch {
-      await finish({ tabId });
+      // 不是隐私页或调试上下文已切换时不终止正常登录流程。
     }
   });
 });
