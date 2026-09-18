@@ -3,7 +3,7 @@
   "name": "BSOFT Wi-Fi 一键登录",
   "version": "1.0.0",
   "description": "为 BSOFT Wi-Fi 网关登录页自动填充本机凭据。",
-  "permissions": ["tabs", "storage", "alarms", "debugger"],
+  "permissions": ["tabs", "storage", "alarms"],
   "host_permissions": [
     "https://portal.bsoft.com.cn:19008/*",
     "http://portal.bsoft.com.cn:19008/*"
